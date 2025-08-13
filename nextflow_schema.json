@@ -82,6 +82,11 @@
                     "description": "Specify how many reads each split of a FastQ file contains. Set 0 to turn off splitting at all.",
                     "help_text": "Use the the tool FastP to split FASTQ file by number of reads. This parallelizes across fastq file shards speeding up mapping. Note although the minimum value is 250 reads, if you have fewer than 250 reads a single FASTQ shard will still be created."
                 },
+                "generate_thresholds": {
+                "type": "boolean",
+                "default": false,
+                "description": "Forzar la creación de los archivos thresholds.bed.gz para cada muestra usando mosdepth"
+                },
                 "nucleotides_per_second": {
                     "type": "integer",
                     "fa_icon": "fas fa-clock",

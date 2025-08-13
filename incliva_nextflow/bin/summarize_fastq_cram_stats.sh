@@ -1,37 +1,38 @@
 #!/bin/bash
+set -euo pipefail
 
 # Uso:
 # ./extract_basic_stats.sh fastp.json cram.stats sample_name output_file
 
-json_file="$1"
-stats_file="$2"
-sample="$3"
-output_file="$4"
+json_file="$1"      # Archivo JSON de fastp
+stats_file="$2"     # Archivo .cram.stats de samtools
+sample="$3"         # Nombre de la muestra
+output_file="$4"    # Ruta del archivo de salida
 
-# Extraer valores de fastp.json con jq
+# Extraer datos desde JSON usando jq
 passed=$(jq '.filtering_result.passed_filter_reads' "$json_file")
 lowq=$(jq '.filtering_result.low_quality_reads' "$json_file")
 dup_rate=$(jq '.duplication.rate' "$json_file")
 
-# Extraer valores del archivo .cram.stats con grep y awk
+# Extraer estadísticas básicas desde cram.stats
 total=$(grep "raw total sequences:" "$stats_file" | awk -F':' '{print $2}' | awk '{print $1}')
 mapped=$(grep "reads mapped:" "$stats_file" | awk -F':' '{print $2}' | awk '{print $1}')
 paired=$(grep "reads paired:" "$stats_file" | awk -F':' '{print $2}' | awk '{print $1}')
 properly_paired=$(grep "reads properly paired:" "$stats_file" | awk -F':' '{print $2}' | awk '{print $1}')
 
-# Cálculos
+# Calcular % de lecturas de baja calidad
 lowq_pct=$(awk "BEGIN {printf \"%.2f\", 100 * $lowq / ($passed + $lowq)}")
 
-# 🔧 Forzar duplicados a 0 si se trabaja con amplicones
+# Forzar % de duplicados a 0.00 (en caso de amplicones)
 dup_pct=0.00
-#dup_pct=$(awk "BEGIN {printf \"%.2f\", 100 * $dup_rate}")
 
+# Calcular % mapeadas y % correctamente emparejadas
 mapped_pct=$(awk "BEGIN {printf \"%.2f\", 100 * $mapped / $total}")
 paired_pct=$(awk "BEGIN {printf \"%.2f\", 100 * $properly_paired / $paired}")
 
-# Escribir salida (sin incluir la línea "Sample\t<sample>")
+# Escribir resultados al archivo
 {
-  echo -e "Sample\t$sample" > "$output_file"
+  echo -e "Sample\t$sample"
   echo -e "Rawdata\t$passed"
   echo -e "%LowQReads\t$lowq_pct"
   echo -e "%MappedReads\t$mapped_pct"
@@ -39,7 +40,4 @@ paired_pct=$(awk "BEGIN {printf \"%.2f\", 100 * $properly_paired / $paired}")
   echo -e "%DuplicateReads\t$dup_pct"
 } > "$output_file"
 
-
 echo "✅ Guardado en $output_file"
-
-#Poner el duplicates =0

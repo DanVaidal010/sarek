@@ -31,8 +31,14 @@ workflow CRAM_QC_MOSDEPTH_SAMTOOLS {
     versions = versions.mix(MOSDEPTH.out.versions)
     versions = versions.mix(SAMTOOLS_STATS.out.versions.first())
 
-    emit:
-    reports
+    // ⬇️⬇️ NUEVO: expón justo lo que necesita el subworkflow de estadísticas
+    mosdepth_threshold = MOSDEPTH.out.thresholds_bed     // *.thresholds.bed.gz
+    mosdepth_per_base  = MOSDEPTH.out.per_base_bed       // *.per-base.bed.gz
+   //TODO Mirar de poner un condicional para casos donde no se le pasa el ext.arg y no genera los archivos 
 
-    versions // channel: [ versions.yml ]
+    emit:    
+    mosdepth_threshold
+    mosdepth_per_base 
+    reports
+    versions
 }

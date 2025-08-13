@@ -307,6 +307,25 @@ workflow NFCORE_SAREK {
         vep_genome,
         vep_species
     )
+
+    if ( (params.tools ?: '').tokenize(',').contains('statistics') ) {
+    STATISTICS_SUBWORKFLOW(
+        cram_variant_calling_pair_to_cross,
+        intervals_and_num_intervals,
+        capture_amplicon, params.outdir,
+        fasta,
+        fasta_fai,
+        CRAM_QC_NO_MD.out.samtools_stats,
+        FASTP.out.json,
+        VCF_QC_BCFTOOLS_VCFTOOLS.out.bcftools_stats,
+        CRAM_QC_NO_MD.out.mosdepth_threshold,
+        CRAM_QC_NO_MD.out.mosdepth_per_base
+    )
+
+    statistics1      = STATISTICS_SUBWORKFLOW.out.global_amplicon_stats
+                         .mix(STATISTICS_SUBWORKFLOW.out.global_mapping_stats)
+    statistics_final = statistics1.mix(STATISTICS_SUBWORKFLOW.out.global_gene_stats)
+}
     emit:
     multiqc_report = SAREK.out.multiqc_report // channel: /path/to/multiqc_report.html
 }
