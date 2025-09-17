@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Args (coinciden con el process GLOBAL_MAPPING_STATS actual):
+#   1) CRAM_FILE
+#   2) CRAM_STATS
+#   3) PERBASE ( *.per-base.bed.gz )
+#   4) THRESHOLDS ( *.thresholds.bed.gz )
+#   5) FASTP_JSON
+#   6) FASTQ_R1        (no usado para el cálculo; mantenido por compatibilidad)
+#   7) REF_FASTA
+#   8) CAPTURE_BED
+#   9) SAMPLE
+CRAM_FILE="$1"
+CRAM_STATS="$2"
+PERBASE="$3"
+THRESHOLDS="$4"
+FASTP_JSON="$5"
+FASTQ_R1="$6"
+REF_FASTA="$7"
+CAPTURE_BED_IN="$8"
+SAMPLE="$9"
+
+export REFERENCE_FASTA="${REF_FASTA}"
+export LC_ALL=C
+
+# -------- Logging silencioso (solo a fichero) --------
+LOG="${SAMPLE}.stats.debug.log"
+: > "${LOG}"  # truncar
+{
+  echo "[INFO] sample=${SAMPLE}"
+  echo "[INFO] cram=${CRAM_FILE}"
+  echo "[INFO] cram_stats=${CRAM_STATS}"
+  echo "[INFO] perbase=${PERBASE}"
+  echo "[INFO] thresholds=${THRESHOLDS}"
+  echo "[INFO] fastp_json=${FASTP_JSON}"
+  echo "[INFO] ref_fasta=${REF_FASTA}"
+  echo "[INFO] bed_in=${CAPTURE_BED_IN}"
+} >> "${LOG}"
+
+# -------- Helpers --------
+clip_pct () {
+  local v="${1:-NA}"
+  [[ "$v" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "NA"; return; }
+  awk -v x="$v" 'BEGIN{ if(x<0)x=0; if(x>100)x=100; printf "%.2f", x }'
+}
+
+read_num_or_na () {
+  local v="${1:-}"
+  [[ "$v" =~ ^[0-9]+(\.[0-9]+)?$ ]] && { echo "$v"; return; }
+  echo "NA"
+}
+
+# -------- 1) Básicos (samtools stats + fastp.json) --------
+total="NA"; mapped="NA"; paired="NA"; properly_paired="NA"
+if [[ -s "${CRAM_STATS}" ]]; then
+  total=$(awk -F':' '/^raw total sequences:/ {gsub(/^[ \t]+/,"",$2); print $2; exit}' "${CRAM_STATS}" || true)
+  mapped=$(awk -F':' '/^reads mapped:/ {gsub(/^[ \t]+/,"",$2); print $2; exit}' "${CRAM_STATS}" || true)
+  paired=$(awk -F':' '/^reads paired:/ {gsub(/^[ \t]+/,"",$2); print $2; exit}' "${CRAM_STATS}" || true)
+  properly_paired=$(awk -F':' '/^reads properly paired:/ {gsub(/^[ \t]+/,"",$2); print $2; exit}' "${CRAM_STATS}" || true)
+fi
+total="${total:-NA}"; mapped="${mapped:-NA}"; paired="${paired:-NA}"; properly_paired="${properly_paired:-NA}"
+
+passed="0"; lowq="0"
+if [[ -s "${FASTP_JSON}" ]]; then
+  passed=$(jq -r '.filtering_result.passed_filter_reads // 0' "${FASTP_JSON}" 2>/dev/null || echo 0)
+  lowq=$(jq -r '.filtering_result.low_quality_reads // 0'      "${FASTP_JSON}" 2>/dev/null || echo 0)
+fi
+
+# Porcentajes
+lowq_pct=$(awk -v p="$passed" -v l="$lowq" 'BEGIN{ tot=p+l; if(tot>0) printf "%.2f", 100*l/tot; else print "0.00" }')
+mapped_pct=$(awk -v t="$total" -v m="$mapped" 'BEGIN{ if(t>0) printf "%.2f", 100*m/t; else print "0.00" }')
+paired_pct=$(awk -v pp="$properly_paired" -v pr="$paired" 'BEGIN{ if(pr>0) printf "%.2f", 100*pp/pr; else print "0.00" }')
+dup_pct="NA"  # si en el futuro tienes fuente de duplicados, sustitúyelo
+
+echo "[INFO] totals: total=${total} mapped=${mapped} paired=${paired} properly=${properly_paired}" >> "${LOG}"
+echo "[INFO] fastp: passed=${passed} lowq=${lowq} pct_lowq=${lowq_pct}" >> "${LOG}"
+
+# -------- 2) Cuartiles de cobertura (per-base + BED con normalización de contigs) --------
+q1="NA"; q3="NA"; qmed="NA"; CAPTURE_BED="${CAPTURE_BED_IN}"
+if [[ -s "${PERBASE}" && -s "${CAPTURE_BED}" ]]; then
+  per_contigs="${SAMPLE}.perbase.contigs.txt"
+  bed_contigs="${SAMPLE}.bed.contigs.txt"
+  (zcat -f "${PERBASE}" || cat "${PERBASE}") | awk '{print $1}' | sort -u > "${per_contigs}"
+  awk '{print $1}' "${CAPTURE_BED}" | sort -u > "${bed_contigs}"
+  overlap_n=$(comm -12 "${per_contigs}" "${bed_contigs}" | wc -l | awk '{print $1}')
+  echo "[INFO] contigs: perbase=$(wc -l < ${per_contigs}) bed=$(wc -l < ${bed_contigs}) overlap=${overlap_n}" >> "${LOG}"
+
+  if [[ "${overlap_n}" -eq 0 ]]; then
+    echo "[WARN] No hay solape de contigs; normalizando BED para ${SAMPLE}" >> "${LOG}"
+    if head -1 "${per_contigs}" | grep -q '^chr'; then
+      awk 'BEGIN{OFS="\t"} { c=$1; if (c !~ /^chr/) c="chr" c; print c,$2,$3,$4,$5,$6 }' "${CAPTURE_BED}" > "${SAMPLE}.capture.norm.bed"
+    else
+      awk 'BEGIN{OFS="\t"} { c=$1; sub(/^chr/,"",c); print c,$2,$3,$4,$5,$6 }' "${CAPTURE_BED}" > "${SAMPLE}.capture.norm.bed"
+    fi
+    CAPTURE_BED="${SAMPLE}.capture.norm.bed"
+  fi
+
+  if python3 /root/sarek/bin/extract_coverage_quartiles.py -p "${PERBASE}" -c "${CAPTURE_BED}" -o quartiles.txt 2>>"${LOG}"; then
+    q1=$(awk '/Cov_1stQ/  {print $2}' quartiles.txt 2>/dev/null || echo NA)
+    q3=$(awk '/Cov_3rdQ/  {print $2}' quartiles.txt 2>/dev/null || echo NA)
+    qmed=$(awk '/Cov_Median/ {print $2}' quartiles.txt 2>/dev/null || echo NA)
+  else
+    echo "[WARN] extract_coverage_quartiles.py falló; dejando NA" >> "${LOG}"
+  fi
+fi
+q1=$(read_num_or_na "$q1"); q3=$(read_num_or_na "$q3"); qmed=$(read_num_or_na "$qmed")
+
+# -------- 3) Nt_100/250/500 (mosdepth thresholds) --------
+d100="NA"; d250="NA"; d500="NA"
+if [[ -s "${THRESHOLDS}" ]]; then
+  if python3 /root/sarek/bin/coverage_depth_thresholds_100_250_500.py -i "${THRESHOLDS}" -o thresholds.txt 2>>"${LOG}"; then
+    d100=$(awk '/Nt_100x/ {print $2}' thresholds.txt 2>/dev/null || echo NA)
+    d250=$(awk '/Nt_250x/ {print $2}' thresholds.txt 2>/dev/null || echo NA)
+    d500=$(awk '/Nt_500x/ {print $2}' thresholds.txt 2>/dev/null || echo NA)
+  else
+    echo "[WARN] coverage_depth_thresholds_100_250_500.py falló; dejando NA" >> "${LOG}"
+  fi
+fi
+d100=$(read_num_or_na "$d100"); d250=$(read_num_or_na "$d250"); d500=$(read_num_or_na "$d500")
+
+# -------- 4) Inserto (fastp) --------
+ins_mean="NA"; ins_sd="NA"
+if [[ -s "${FASTP_JSON}" ]]; then
+  if python3 /root/sarek/bin/calculate_insert_metrics.py -j "${FASTP_JSON}" -o insert.txt 2>>"${LOG}"; then
+    ins_mean=$(awk '/Mean_insert/ {print $2}' insert.txt 2>/dev/null || echo NA)
+    ins_sd=$(awk   '/Insert_SD/   {print $2}' insert.txt 2>/dev/null || echo NA)
+  else
+    echo "[WARN] calculate_insert_metrics.py falló; dejando NA" >> "${LOG}"
+  fi
+fi
+ins_mean=$(read_num_or_na "$ins_mean"); ins_sd=$(read_num_or_na "$ins_sd")
+
+# -------- 5) %UsableReads (Picard PF_READS_ALIGNED / raw total sequences) --------
+usable="NA"
+if /root/sarek/bin/calculate_ontarget_picard.sh \
+      "${CRAM_FILE}" "${FASTQ_R1}" "." "${SAMPLE}" "${REF_FASTA}" "${CRAM_STATS}" >> "${LOG}" 2>&1; then
+  usable=$(awk '{print $2}' "${SAMPLE}.ontarget_result.txt" 2>/dev/null || echo NA)
+fi
+usable=$(clip_pct "$usable")
+
+# -------- 6) Kit_specificity (on-target / global con BED) --------
+kitsp="NA"
+if [[ -s "${CAPTURE_BED_IN}" ]]; then
+  if /root/sarek/bin/calculate_kit_specificity_picard.sh \
+        "${CRAM_FILE}" "." "${SAMPLE}" "${REF_FASTA}" "${CAPTURE_BED_IN}" >> "${LOG}" 2>&1; then
+    kitsp=$(awk '{print $2}' "${SAMPLE}.kit_specificity_result.txt" 2>/dev/null || echo NA)
+  fi
+else
+  echo "[INFO] Sin BED de captura; Kit_specificity=NA" >> "${LOG}"
+fi
+kitsp=$(clip_pct "$kitsp")
+
+# -------- 7) NumVars (por ahora NA; se rellenará cuando dispongas de bcftools stats) --------
+numvars="NA"
+
+# -------- 8) CSV por muestra --------
+{
+  echo "Sample,Rawdata,%LowQReads,%MappedReads,%Paired_reads,%DuplicateReads,%UsableReads,Kit_specificity,Cov_1stQ,Cov_3rdQ,Cov_Median,Nt_100x,Nt_250x,Nt_500x,Mean_insert,Insert_SD,NumVars"
+  echo "${SAMPLE},${total},${lowq_pct},${mapped_pct},${paired_pct},${dup_pct},${usable},${kitsp},${q1},${q3},${qmed},${d100},${d250},${d500},${ins_mean},${ins_sd},${numvars}"
+} > "${SAMPLE}_mapping_stats.csv"

@@ -1,0 +1,6 @@
+Sample	Tumor_P002
+Rawdata	183900
+%LowQReads	0.12
+%MappedReads	84.41
+%Paired_reads	83.12
+%DuplicateReads	0.00
