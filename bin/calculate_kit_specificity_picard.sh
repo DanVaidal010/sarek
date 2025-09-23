@@ -1,68 +1,65 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Uso: calculate_kit_specificity_picard.sh <cram> <output_dir|-> <sample_id> <reference_fasta> <capture_bed>
 
-# USO:
-#   calculate_kit_specificity_picard.sh <cram> <outdir> <sample> <reference_fasta> <bed>
-CRAM="$1"
-OUTDIR="$2"
-SAMPLE="$3"
-REF_FASTA="$4"
-BED="$5"
+cram_path="$1"
+output_dir="$2"
+sample_id="$3"
+reference_fasta="${4:?missing ref fasta}"
+capture_bed="${5:?missing capture bed}"
 
-mkdir -p "$OUTDIR"
-cd "$OUTDIR"
+PICARD_IMG="/Incliva/Sarek/Containers.Singularity/picard:3.4.0--hdfd78af_0"
+BIND="/Incliva:/Incliva,/lib:/lib,/lib64:/lib64,/usr/lib:/usr/lib,/usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu,/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
 
-if [[ ! -s "${BED}" ]]; then
-  echo -e "Kit_specificity\tNA" > "${SAMPLE}.kit_specificity_result.txt"
-  exit 0
-fi
-
-# Construir BAM global y on-target (CRAM necesita -T)
-samtools view -T "${REF_FASTA}" -b "${CRAM}" > "${SAMPLE}.global.bam"
-samtools view -T "${REF_FASTA}" -b -L "${BED}" "${CRAM}" > "${SAMPLE}.ontarget.bam"
-
-# Picard para ambos
-picard CollectAlignmentSummaryMetrics \
-  I="${SAMPLE}.global.bam" \
-  O="${SAMPLE}.global.aln_metrics.txt" \
-  REFERENCE_SEQUENCE="${REF_FASTA}" \
-  ASSUME_SORTED=true \
-  VALIDATION_STRINGENCY=SILENT
-
-picard CollectAlignmentSummaryMetrics \
-  I="${SAMPLE}.ontarget.bam" \
-  O="${SAMPLE}.ontarget.aln_metrics.txt" \
-  REFERENCE_SEQUENCE="${REF_FASTA}" \
-  ASSUME_SORTED=true \
-  VALIDATION_STRINGENCY=SILENT
-
-# PF_READS_ALIGNED (PAIR o FIRST+SECOND)
-get_pf() {
-  local f="$1"
-  local x
-  x=$(awk 'BEGIN{FS="\t"} $1=="PAIR"{print $10}' "$f" 2>/dev/null || true)
-  if [[ -z "$x" || "$x" == "0" ]]; then
-    local a b
-    a=$(awk 'BEGIN{FS="\t"} $1=="FIRST_OF_PAIR"{print $10}'  "$f" 2>/dev/null || echo 0)
-    b=$(awk 'BEGIN{FS="\t"} $1=="SECOND_OF_PAIR"{print $10}' "$f" 2>/dev/null || echo 0)
-    x=$(awk -v aa="$a" -v bb="$b" 'BEGIN{print (aa+bb)}')
-  fi
-  echo "$x"
+run_picard() {
+  SINGULARITYENV_LC_ALL=C.UTF-8 \
+  SINGULARITYENV_LANG=C.UTF-8 \
+  singularity exec -B "$BIND" "$PICARD_IMG" picard "$@"
 }
 
-pf_global=$(get_pf "${SAMPLE}.global.aln_metrics.txt")
-pf_target=$(get_pf "${SAMPLE}.ontarget.aln_metrics.txt")
+prefix="${output_dir}/${sample_id}"
+bam="${prefix}.bam"
+bam_target="${prefix}.ontarget.bam"
+metrics_all="${prefix}_mapped_alignment_metrics.txt"
+metrics_target="${prefix}_ontarget_alignment_metrics.txt"
+result_file="${prefix}.kit_specificity_result.txt"
 
-pct="NA"
-if [[ "$pf_global" -gt 0 ]]; then
-  pct=$(awk -v a="$pf_target" -v g="$pf_global" 'BEGIN{printf "%.2f", 100*a/g}')
+cleanup() {
+  [[ "$output_dir" == "-" ]] && rm -f "$bam" "$bam.bai" "$bam_target" "$bam_target.bai" "$metrics_all" "$metrics_target" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+if [[ "$output_dir" == "-" ]]; then
+  prefix="${sample_id}.tmp"
+  bam="${prefix}.bam"
+  bam_target="${prefix}.ontarget.bam"
+  metrics_all="${prefix}_mapped_alignment_metrics.txt"
+  metrics_target="${prefix}_ontarget_alignment_metrics.txt"
+  result_file="${prefix}.kit_specificity_result.txt"
 fi
 
-# Clip 0..100
-if [[ "${pct}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-  pct=$(awk -v x="$pct" 'BEGIN{if(x<0)x=0; if(x>100)x=100; printf "%.2f", x}')
+# CRAM -> BAM y on-target
+samtools view -b -T "$reference_fasta" "$cram_path" > "$bam"
+samtools index "$bam"
+samtools view -b -L "$capture_bed" "$bam" > "$bam_target"
+samtools index "$bam_target"
+
+# Picard: global y on-target
+run_picard CollectAlignmentSummaryMetrics I="$bam"        O="$metrics_all"    R="$reference_fasta" VALIDATION_STRINGENCY=LENIENT
+run_picard CollectAlignmentSummaryMetrics I="$bam_target" O="$metrics_target" R="$reference_fasta" VALIDATION_STRINGENCY=LENIENT
+
+mapped_reads=$(grep -m1 "^PAIR" "$metrics_all"   | awk '{print $6}' || echo "0")
+ontarget_reads=$(grep -m1 "^PAIR" "$metrics_target" | awk '{print $6}' || echo "0")
+
+if [[ -z "$mapped_reads" || -z "$ontarget_reads" || "$mapped_reads" -eq 0 ]]; then
+  specificity="0.00"
 else
-  pct="NA"
+  specificity=$(awk "BEGIN { printf \"%.2f\", ($ontarget_reads / $mapped_reads) * 100 }")
 fi
 
-echo -e "Kit_specificity\t${pct}" > "${SAMPLE}.kit_specificity_result.txt"
+if [[ "$output_dir" == "-" ]]; then
+  echo "$specificity"
+else
+  echo -e "Kit_specificity\t$specificity" > "$result_file"
+  echo "✅ Resultado guardado en $result_file"
+fi

@@ -890,11 +890,8 @@ if (params.enable_statistics) {
     println "[MAIN] → Activando STATISTICS_SUBWORKFLOW"
 
     // --- CRAM + stats ---
-    ch_cram_final = cram_variant_calling_no_spark.map { meta, cram, _crai ->
-        tuple(meta, cram)  // Nos quedamos solo con CRAM
-    }
-    ch_samtools = CRAM_QC_NO_MD.out.reports
-        .filter { _meta, f -> f.name.endsWith('.cram.stats') }
+    ch_cram_final = cram_variant_calling_no_spark.map { meta, cram, _crai -> tuple(meta, cram) }
+    ch_samtools   = CRAM_QC_NO_MD.out.reports.filter { _meta, f -> f.name.endsWith('.cram.stats') }
 
     // --- Mosdepth (per-base y thresholds) ---
     ch_mosdepth_per = CRAM_QC_NO_MD.out.mosdepth_per_base
@@ -907,14 +904,8 @@ if (params.enable_statistics) {
     // --- Bcftools ---
     ch_bcftools = VCF_QC_BCFTOOLS_VCFTOOLS.out.bcftools_stats
 
-    // --- Reference fasta + fai + capture bed --- Utilizar el canal hecho de fasta,fasta.fai
-    //ch_fasta       = Channel.of(file(params.fasta))
-    //ch_fasta_fai   = Channel.of(file(params.fasta_fai))
-    //ch_capture_bed = Channel.of(file(params.intervals))
-
     // --- Llamada al subworkflow ---
-        statistics_results = STATISTICS_SUBWORKFLOW(
-        fastq_gz,
+    statistics_results = STATISTICS_SUBWORKFLOW(
         ch_cram_final,
         ch_samtools,
         ch_mosdepth_per,
@@ -927,12 +918,11 @@ if (params.enable_statistics) {
         intervals_bed_combined
     )
 
-    // --- Exponer outputs globales ---
-    statistics_final = Channel.empty()
-        .mix(statistics_results.global_csv)
-        .mix(statistics_results.global_amplicon_stats)
-        .mix(statistics_results.global_gene_stats)
+    // --- Verificar salida ---
+    statistics_results.global_csv.view()
 }
+
+
     emit:
     multiqc_report // channel: /path/to/multiqc_report.html
     versions       // channel: [ path(versions.yml) ]
