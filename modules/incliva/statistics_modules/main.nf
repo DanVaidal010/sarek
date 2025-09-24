@@ -1,27 +1,28 @@
 process GLOBAL_MAPPING_STATS {
-    tag "${meta.patient}_${meta.sample}"
+    tag "${key}"  // tag único por muestra
 
-    publishDir "${params.outdir}/${meta.sample}",
+    publishDir "${params.outdir}/${key}",
         mode: 'copy',
         overwrite: true
 
     container "${params.container_global_stats}"
 
     input:
-    tuple val(meta), path(cram), path(stats), path(perbase), path(thr), path(fastp), path(bcftools)
-    tuple path(fasta), path(fai)
-    path bed
+    tuple val(key), path(cram), path(stats), path(perbase), path(thr), path(fastp), path(bcftools)
+    val fasta
+    val fai
+    val bed
 
     output:
-    path "${meta.sample}_mapping_stats.csv"
+    path "${key}_mapping_stats.csv"
 
     script:
     """
-    # Cabecera
-    echo "Sample,CRAM,CRAM_stats,PerBase,Thresholds,FastpJSON,Bcftools,Reference,FastaFAI,CaptureBed" > ${meta.sample}_mapping_stats.csv
+    echo "DEBUG → Running GLOBAL_MAPPING_STATS for sample: ${key}" >&2
 
-    # Fila con nombres de archivo
-    echo "${meta.sample},\\
+    echo "Sample,CRAM,CRAM_stats,PerBase,Thresholds,FastpJSON,Bcftools,Reference,FastaFAI,CaptureBed" > ${key}_mapping_stats.csv
+
+    echo "${key},\\
     \$(basename ${cram}),\\
     \$(basename ${stats}),\\
     \$(basename ${perbase}),\\
@@ -30,6 +31,6 @@ process GLOBAL_MAPPING_STATS {
     \$(basename ${bcftools}),\\
     \$(basename ${fasta}),\\
     \$(basename ${fai}),\\
-    \$(basename ${bed})" >> ${meta.sample}_mapping_stats.csv
+    \$(basename ${bed})" >> ${key}_mapping_stats.csv
     """
 }
