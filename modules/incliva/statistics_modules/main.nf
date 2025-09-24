@@ -1,35 +1,35 @@
 process GLOBAL_MAPPING_STATS {
-  tag { meta.patient }
-  publishDir "${params.outdir}/${meta.patient}",
-             mode: 'copy',
-             overwrite: true
-  container "${params.container_global_stats}"
+    tag "${meta.patient}_${meta.sample}"
 
-  input:
-    // Canal con todos los datos de muestra
-    tuple val(meta), path(cram), path(stats), path(perbase), path(thr), path(fastp), path(fq1), path(bcftools)
-    // Canal con fasta + fai
+    publishDir "${params.outdir}/${meta.sample}",
+        mode: 'copy',
+        overwrite: true
+
+    container "${params.container_global_stats}"
+
+    input:
+    tuple val(meta), path(cram), path(stats), path(perbase), path(thr), path(fastp), path(bcftools)
     tuple path(fasta), path(fai)
-    // Canal con capture bed
     path bed
 
-  output:
-    path "${meta.patient}_mapping_stats.csv"
+    output:
+    path "${meta.sample}_mapping_stats.csv"
 
-  script:
-  """
-  echo "Sample,CRAM,CRAM_stats,PerBase,Thresholds,FastpJSON,FastqReads,Bcftools,Reference,FastaFAI,CaptureBed" > ${meta.patient}_mapping_stats.csv
+    script:
+    """
+    # Cabecera
+    echo "Sample,CRAM,CRAM_stats,PerBase,Thresholds,FastpJSON,Bcftools,Reference,FastaFAI,CaptureBed" > ${meta.sample}_mapping_stats.csv
 
-  echo "${meta.patient},\\
-  ${cram},\\
-  ${stats},\\
-  ${perbase},\\
-  ${thr},\\
-  ${fastp},\\
-  ${fq1},\\
-  ${bcftools},\\
-  ${fasta},\\
-  ${fai},\\
-  ${bed}" >> ${meta.patient}_mapping_stats.csv
-  """
+    # Fila con nombres de archivo
+    echo "${meta.sample},\\
+    \$(basename ${cram}),\\
+    \$(basename ${stats}),\\
+    \$(basename ${perbase}),\\
+    \$(basename ${thr}),\\
+    \$(basename ${fastp}),\\
+    \$(basename ${bcftools}),\\
+    \$(basename ${fasta}),\\
+    \$(basename ${fai}),\\
+    \$(basename ${bed})" >> ${meta.sample}_mapping_stats.csv
+    """
 }

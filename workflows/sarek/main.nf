@@ -899,7 +899,7 @@ if (params.enable_statistics) {
 
     // --- Fastp ---
     ch_fastp_json  = FASTP.out.json
-    ch_fastp_reads = FASTP.out.reads
+    //ch_fastp_reads = FASTP.out.reads
 
     // --- Bcftools ---
     ch_bcftools = VCF_QC_BCFTOOLS_VCFTOOLS.out.bcftools_stats
@@ -911,7 +911,6 @@ if (params.enable_statistics) {
         ch_mosdepth_per,
         ch_mosdepth_thr,
         ch_fastp_json,
-        ch_fastp_reads,
         ch_bcftools,
         fasta,
         fasta_fai,
