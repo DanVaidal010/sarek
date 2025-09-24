@@ -51,8 +51,7 @@ workflow STATISTICS_SUBWORKFLOW {
     // FASTA, FAI y BED como valores constantes
     ch_fasta_val = fasta.map { meta, f -> f }
     ch_fai_val   = fasta_fai.map { meta, f -> f }
-    ch_bed_val   = capture_bed
-
+    ch_bed_val = capture_bed
 
     // Llamada al process
     sample_csv = GLOBAL_MAPPING_STATS(ch_joined, ch_fasta_val, ch_fai_val, ch_bed_val)

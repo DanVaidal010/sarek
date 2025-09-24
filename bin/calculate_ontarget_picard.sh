@@ -2,55 +2,47 @@
 set -euo pipefail
 
 # === INPUTS ===
-cram_path="$1"
-fastq_r1="$2"
-output_dir="$3"
-sample_id="$4"
+cram_path="$1"        # CRAM recalibrado
+fastp_json="$2"       # fastp.json
+reference_fasta="$3"  # FASTA de referencia
+sample_id="$4"        # ID de muestra
+output_dir="$5"       # Carpeta de salida
 
-# === CONFIG ===
-reference_fasta="/Incliva/Sarek/Genomas.Ref/Homo_sapiens_assembly38.fasta"
-PICARD_IMG="/Incliva/Sarek/Containers.Singularity/picard:3.4.0--hdfd78af_0"
-
-# Binds robustos (libz suele estar en /lib/x86_64-linux-gnu)
-BIND="/Incliva:/Incliva,/lib:/lib,/lib64:/lib64,/usr/lib:/usr/lib,/usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu,/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu"
-
-# Función wrapper para Picard con entorno saneado
-run_picard() {
-  SINGULARITYENV_LC_ALL=C.UTF-8 \
-  SINGULARITYENV_LANG=C.UTF-8 \
-  singularity exec -B "$BIND" "$PICARD_IMG" picard "$@"
-}
-
-echo "🧪 Procesando %OnTargetNoDupReads para muestra: $sample_id"
-
+# === OUTPUTS ===
 prefix="${output_dir}/${sample_id}"
 bam_raw="${prefix}.mapped.bam"
 metrics_file="${prefix}_ontarget_alignment_metrics.txt"
 result_file="${prefix}.ontarget_result.txt"
 
-# CRAM -> BAM
+echo "🧪 Procesando %OnTargetNoDupReads para muestra: $sample_id"
+
+# 1. CRAM → BAM
 samtools view -b -T "$reference_fasta" "$cram_path" > "$bam_raw"
 samtools index "$bam_raw"
 
-# Picard
-run_picard CollectAlignmentSummaryMetrics \
-  I="$bam_raw" \
-  O="$metrics_file" \
-  R="$reference_fasta" \
-  VALIDATION_STRINGENCY=LENIENT
+# 2. Ejecutar Picard
+picard CollectAlignmentSummaryMetrics \
+    I="$bam_raw" \
+    O="$metrics_file" \
+    R="$reference_fasta" \
+    VALIDATION_STRINGENCY=LENIENT
 
+# 3. Extraer lecturas on-target
 ontarget_reads=$(grep -m1 "^PAIR" "$metrics_file" | awk '{print $6}' || echo "0")
 
-# FASTQ estándar: 4 líneas por read
-raw_reads=$(zcat "$fastq_r1" | wc -l | awk '{printf "%d", $1/2}')
+# 4. Extraer lecturas crudas de fastp.json
+raw_reads=$(jq -r '.summary.before_filtering.total_reads' "$fastp_json")
 
+# 5. Calcular porcentaje
 if [[ -z "$ontarget_reads" || -z "$raw_reads" || "$raw_reads" -eq 0 ]]; then
-  on_target_pct="0.00"
+    on_target_pct="0.00"
 else
-  on_target_pct=$(awk "BEGIN { printf \"%.2f\", ($ontarget_reads / $raw_reads) * 100 }")
+    on_target_pct=$(awk "BEGIN { printf \"%.2f\", ($ontarget_reads / $raw_reads) * 100 }")
 fi
 
+# 6. Guardar resultado
 echo -e "%OnTargetNoDupReads\t$on_target_pct" > "$result_file"
 echo "✅ Resultado guardado en $result_file"
 
+# 7. Limpieza
 rm -f "$bam_raw" "$bam_raw.bai" "$metrics_file"
